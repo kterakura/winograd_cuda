@@ -62,7 +62,7 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
     __syncthreads();
     for (int i = id; i < 512; i+=blockDim.x){
         const int x = i&31, y = (i>>5) + (conv_place<<4);
-        output[x + (y<<5) + (conv_ch<<10)] = ((s_output[i] + (1 << 4)) >> 5) + 128;
+        output[x + (y<<5) + (conv_ch<<10)] = clamp(((s_output[i] + (1 << 4)) >> 5)) + 128;
     } 
 }
 
@@ -78,9 +78,11 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	__shared__ int Btd [3][4][4];
 	__shared__ int BtdB [3][4][4];
 	__shared__ int I [16][4][4];
-    __shared__ int AtI [16][2][4];
 	
-	I[tz][ty][tx] = 0;
+	for(int i=id; i<16*4*4; i+=48){
+        const int z = i>>4, y = (i&15)>>2, x = i&3;
+        I[z][y][x] = 0;
+    }
 	input_smem[tz][ty][tx] = input[in_start];
 	// __syncthreads();
 	switch (ty)
@@ -114,25 +116,24 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 		BtdB[tz][tx][ty] = Btd[tz][ty][1] - Btd[tz][ty][3];
 		break;
 	}
-	// __syncthreads();
-	for(int i=id; i<48*16; i+=48){
+	__syncthreads();
+
+    for(int i=id; i<48*16; i+=48){
         const int ch = i/48;
 		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
 	}
-
     __syncthreads();
-    const int temp = tx + (ty<<2);
-    if(tz == 0 && temp <16) {
-        const int out_start1 = (bx*2+1) + ((by*2+1)*34) + ((temp)*1156);
-        const int out_start2 = (bx*2+2) + ((by*2+1)*34) + ((temp)*1156);
-        const int out_start3 = (bx*2+1) + ((by*2+2)*34) + ((temp)*1156);
-        const int out_start4 = (bx*2+2) + ((by*2+2)*34) + ((temp)*1156);
-        output[out_start1] = clamp((((I[temp][0][0] + I[temp][0][1] + I[temp][0][2] + I[temp][1][0] + I[temp][1][1] + I[temp][1][2] + I[temp][2][0] + I[temp][2][1] + I[temp][2][2]) + (1 << 6)) >>7)) + 128;
-        output[out_start2] = clamp((((I[temp][0][1] - I[temp][0][2] - I[temp][0][3] + I[temp][1][1] - I[temp][1][2] - I[temp][1][3] + I[temp][2][1] - I[temp][2][2] - I[temp][2][3]) + (1 << 6)) >>7)) + 128;
-        output[out_start3] = clamp((((I[temp][1][0] + I[temp][1][1] + I[temp][1][2] - I[temp][2][0] - I[temp][2][1] - I[temp][2][2] - I[temp][3][0] - I[temp][3][1] - I[temp][3][2]) - (1 << 6)) >>7)) + 128;
-        output[out_start4] = clamp((((I[temp][1][1] - I[temp][1][2] - I[temp][1][3] - I[temp][2][1] + I[temp][2][2] + I[temp][2][3] - I[temp][3][1] + I[temp][3][2] + I[temp][3][3]) + (1 << 6)) >>7)) + 128;
+    
+    if(id < 16){
+        const int out_start1 = (bx*2+1) + ((by*2+1)*34) + ((id)*1156);
+        const int out_start2 = (bx*2+2) + ((by*2+1)*34) + ((id)*1156);
+        const int out_start3 = (bx*2+1) + ((by*2+2)*34) + ((id)*1156);
+        const int out_start4 = (bx*2+2) + ((by*2+2)*34) + ((id)*1156);
+        output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
+        output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
     }
-
 }
 
 
@@ -153,8 +154,8 @@ __global__ void padding( signed char *input,  signed char *output){
 
 int main(){
     cudaEvent_t start, stop;
-    float elapsed_time_ms;
-     signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
+    float elapsed_time_ms1, elapsed_time_ms2;
+    signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
 
     initialData(h_char, SIZE);
 
@@ -175,7 +176,7 @@ int main(){
 	FILE* fp;
     signed char x1_1[FSIZE];
     signed short wino[WSIZE];
-    fp = fopen( "./conv_block.conv.weight", "rb" );
+    fp = fopen( "./params/conv_block.conv.weight", "rb" );
     if (!fp) printf("x1_1: pathを間違えています\n");
     for(int i=0; i<FSIZE; i++){
         if( fread( &f, sizeof(f), 1, fp ) < 1 ){
@@ -210,18 +211,17 @@ int main(){
         // cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
         conv<<<32, 256>>>(d_char, d_filter, d_char_out);
     }
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms1, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("normal:%f\n", elapsed_time_ms);
+    printf("normal:%f\n", elapsed_time_ms1);
 
     signed char res[OUTSIZE];
     cudaMemcpy(res, d_char_out, sizeof(signed char) * OUTSIZE, cudaMemcpyDeviceToHost);
-    for(int i=0; i<32; i++) printf("%d, ", res[i]);
-    printf("\n");
+    
 
     //Measure load store uint8
     padding<<<3, dim3(32,32)>>>(d_char, d_charp);
@@ -229,22 +229,44 @@ int main(){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     for(int i=0; i<1000; i++){
-        cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
+        cudaMemset(&d_char_outp, 0, sizeof(signed char)*POUTSIZE);
 		winograd<<<dim3(16, 16), dim3(4,4,3)>>>(d_charp, d_wino, d_char_outp);
     } 
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms2, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("winograd:%f\n", elapsed_time_ms);
+    printf("winograd:%f\n", elapsed_time_ms2);
     
     signed char res1[POUTSIZE];
     cudaMemcpy(res1, d_char_outp, sizeof(signed char) * POUTSIZE, cudaMemcpyDeviceToHost);
-    for(int i=35; i<68; i++) printf("%d, ", char (res1[i]));
-    printf("\n");
+    
 
+    //check data
+    signed char resp[POUTSIZE] = {0};
+    for(int i=0;i<16;i++){
+        for (int j=0;j<32; j++){
+            for (int k=0;k<32; k++){
+                resp[j+1 + (k+1)*34 + i*1156] = res[j + k*32 + i*1024];
+            }
+        }
+    }
+
+    int miss = 0;
+    for(int i=0;i<POUTSIZE; i++) if(resp[i] != res1[i]) {printf("%d ", i); miss++;}
+    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    else if(miss != 0) printf("bat!");
+
+    // for(int i=0; i<34*34; i++){
+    //     if(i%34 == 0)printf("\n"); 
+    //     printf("%d ", resp[i]);
+    // } printf("\n"); 
+    // for(int i=0; i<34*34; i++){
+    //     if(i%34 == 0)printf("\n"); 
+    //     printf("%d ", res1[i]);
+    // } printf("\n");
 
     free(h_char );
     cudaFree(d_char);

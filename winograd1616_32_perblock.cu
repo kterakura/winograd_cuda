@@ -23,64 +23,48 @@ __device__  signed char clamp(int v)
 }
 
 
-
-
-
 __global__ void conv( signed char *input,  signed char *filter,  signed char *output){
-    const int id = threadIdx.x, conv_ch = blockIdx.x;
-
-	__shared__ signed char s_input[10368];  //18*18*32
-	__shared__ signed char s_filter[288];   //3*3*32
-    __shared__ int s_output[256];  //16*16
-
-    // init shared memory
-    for(int i = id; i < 10368; i+=blockDim.x) s_input[i] = 0;
-    for(int j = id; j < 288; j+=blockDim.x) s_filter[j] = filter[j + conv_ch*288];
-    for(int k = id; k < 256; k+=blockDim.x) s_output[k] = 0;
-
-    for(int i = id; i < 8192; i+=blockDim.x){
-        const int x = i&15;
-        const int y = (i&255)>>4;
-        const int ch = i>>8;
-        s_input[(x+1) + 18*(y+1) + 324*ch] = input[i];
+    __shared__ int s_output[32];
+    __shared__ signed char input_smem [32][9];
+    const int tz = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
+    for(int i=0; i<9; i++){
+        const int x = i%3, y = i/3;
+        const int in_start = bx+x + (by+y)*18 + tz*324;  //324 = 18*18
+        input_smem[tz][i] = input[in_start];
+    }
+    
+    s_output[tz] = 0;
+    __syncthreads();
+    for(int i=0; i<32; i++){
+        const int x0 = input_smem[tz][0] * filter[0 + tz*9 + i*288]; //288 = 9*32
+        const int x1 = input_smem[tz][1] * filter[1 + tz*9 + i*288];
+        const int x2 = input_smem[tz][2] * filter[2 + tz*9 + i*288];
+        const int x3 = input_smem[tz][3] * filter[3 + tz*9 + i*288];
+        const int x4 = input_smem[tz][4] * filter[4 + tz*9 + i*288];
+        const int x5 = input_smem[tz][5] * filter[5 + tz*9 + i*288];
+        const int x6 = input_smem[tz][6] * filter[6 + tz*9 + i*288];
+        const int x7 = input_smem[tz][7] * filter[7 + tz*9 + i*288];
+        const int x8 = input_smem[tz][8] * filter[8 + tz*9 + i*288];
+        atomicAdd(&s_output[i], x0+x1+x2+x3+x4+x5+x6+x7+x8);
     }
     __syncthreads();
-
-    for (int n = id; n < 8192; n += blockDim.x){
-        const int x = n&15;
-        const int y = (n&255)>>4;
-        const int ch = n>>8;
-        const int x0 = s_input[(x)  +18*(y)  + ch*324] * s_filter[0 + ch*9];
-        const int x1 = s_input[(x+1)+18*(y)  + ch*324] * s_filter[1 + ch*9];
-        const int x2 = s_input[(x+2)+18*(y)  + ch*324] * s_filter[2 + ch*9];
-        const int x3 = s_input[(x)  +18*(y+1)+ ch*324] * s_filter[3 + ch*9];
-        const int x4 = s_input[(x+1)+18*(y+1)+ ch*324] * s_filter[4 + ch*9];
-        const int x5 = s_input[(x+2)+18*(y+1)+ ch*324] * s_filter[5 + ch*9];
-        const int x6 = s_input[(x)  +18*(y+2)+ ch*324] * s_filter[6 + ch*9];
-        const int x7 = s_input[(x+1)+18*(y+2)+ ch*324] * s_filter[7 + ch*9];
-        const int x8 = s_input[(x+2)+18*(y+2)+ ch*324] * s_filter[8 + ch*9];
-        atomicAdd(&s_output[x+(y<<4)], x0+x1+x2+x3+x4+x5+x6+x7+x8);
-    }
-    __syncthreads();
-    for (int i = id; i < 256; i+=blockDim.x) output[i + (conv_ch<<8)] = clamp(((s_output[i] + (1 << 4)) >>5)) + 128;
+    const int out_start = bx+1 + (by+1)*18 + (tz*324);
+    output[out_start] = clamp(((s_output[tz] + (1 << 4)) >>5)) + 128;
 }
-
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(32/2, 32/2) dim3(4,4,16)
+    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
 	const int in_start = bx*2 + tx + (by*2+ty)*18 + tz*324;  //324 = 18*18
-	const int out_start = (bx<<1) + tx + (((by<<1)+ty)<<4) + (tz<<8);  //1024 = 32*32
 
 	// dim3(32/2, 32/2, 16) dim3(16,4,4)
 	// const int in_start = tx + ((ty + (bx<<1))<<4) + (tz + (by<<1))*544;
 
 
 	__shared__ signed char input_smem [32][4][4];
-	__shared__ int output_smem [32][2][2];
 	__shared__ int Btd [32][4][4];
 	__shared__ int BtdB [32][4][4];
-	__shared__ int AtI [32][2][4];
 	__shared__ int I [32][4][4];
 	
 	I[tz][ty][tx] = 0;
@@ -117,38 +101,22 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 		BtdB[tz][tx][ty] = Btd[tz][ty][1] - Btd[tz][ty][3];
 		break;
 	}
-	// __syncthreads();
-	
-	for(int i=0; i<32; i++){
-		const int w_start = tx + (ty<<2)+ (tz<<4) + (i*16*32);  //256 = 4*4*16
-		atomicAdd(&I[i][ty][tx], BtdB[tz][ty][tx]*weight[w_start]);
-	}
-	// __syncthreads();
 
-	if(ty > 1) return;
-	switch (ty)
-	{
-	case 0:
-		AtI[tz][ty][tx] = I[tz][0][tx] + I[tz][1][tx] + I[tz][2][tx];
-		break;
-	case 1:
-		AtI[tz][ty][tx] = I[tz][1][tx] - I[tz][2][tx] - I[tz][3][tx];
-		break;
+    for(int i=id; i<16384; i+=512){ //16384 = 4*4*32*32
+        const int ch = i>>9;
+		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
 	}
-	// __syncthreads();
-
-	if(tx > 1) return;
-	switch (tx)
-	{
-	case 0:
-		output_smem[tz][ty][tx] = AtI[tz][ty][0] + AtI[tz][ty][1] + AtI[tz][ty][2];
-		break;
-	case 1:
-		output_smem[tz][ty][tx] = AtI[tz][ty][1] - AtI[tz][ty][2] - AtI[tz][ty][3];
-		break;
-	}
-	// __syncthreads();
-	output[out_start] = clamp(((output_smem[tz][ty][tx] + (1 << 6)) >>7)) + 128;
+	__syncthreads();
+    if(id < 32) {
+        const int out_start1 = (bx*2+1) + ((by*2+1)*18) + ((id)*324);
+        const int out_start2 = (bx*2+2) + ((by*2+1)*18) + ((id)*324);
+        const int out_start3 = (bx*2+1) + ((by*2+2)*18) + ((id)*324);
+        const int out_start4 = (bx*2+2) + ((by*2+2)*18) + ((id)*324);
+        output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
+        output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
+    }
 }
 
 
@@ -174,11 +142,11 @@ int main(){
 
     initialData(h_char, SIZE);
     // allocate global memory
-    signed char *d_char, *d_char_out, *d_char_out1, *d_charp, *d_filter;
+    signed char *d_char, *d_char_out, *d_char_outp, *d_charp, *d_filter;
     signed short *d_wino;
     cudaMalloc( (void **) &d_char, SIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_char_out, SIZE * sizeof( signed char) );
-    cudaMalloc( (void **) &d_char_out1, SIZE * sizeof( signed char) );
+    cudaMalloc( (void **) &d_char_outp, PSIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_charp, PSIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_filter, FSIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_wino, WSIZE * sizeof( signed short) );
@@ -216,12 +184,17 @@ int main(){
     if (fp) fclose(fp);
     
 
+
+    padding<<<32, dim3(16,16)>>>(d_char, d_charp);
     //Measure load store uint8
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    for(int i=0; i<1000; i++) conv<<<32, 256>>>(d_char, d_filter, d_char_out);
+    for(int i=0; i<1000; i++) {
+        cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
+        conv<<<dim3(16, 16), dim3(32)>>>(d_charp, d_filter, d_char_outp);
+    }
     elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -230,18 +203,16 @@ int main(){
     cudaEventDestroy(stop);
     printf("normal:%f\n", elapsed_time_ms1);
 
-    signed char res[SIZE];
-    cudaMemcpy(res, d_char_out, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);
-    for(int i=0; i<32; i++) printf("%d, ", res[i]);
-    printf("\n");
+    signed char res[PSIZE];
+    cudaMemcpy(res, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     //Measure load store uint8
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     for(int i=0; i<1000; i++){
-        padding<<<32, dim3(16,16)>>>(d_char, d_charp);
-		winograd<<<dim3(8, 8), dim3(4,4,32)>>>(d_charp, d_wino, d_char_out1);
+        cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
+		winograd<<<dim3(8, 8), dim3(4,4,32)>>>(d_charp, d_wino, d_char_outp);
     } 
     elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
@@ -251,11 +222,23 @@ int main(){
     cudaEventDestroy(stop);
     printf("winograd:%f\n", elapsed_time_ms2);
     
-    signed char res1[SIZE];
-    cudaMemcpy(res1, d_char_out1, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);
-    for(int i=0; i<32; i++) printf("%d, ", char (res1[i]));
-    printf("\n");
+    signed char res1[PSIZE];
+    cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
+
+    //check data
+    int miss = 0;
+    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i]) {printf("%d ", i); miss++;}
+    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    else if(miss != 0) printf("%f 倍速くなりました。答え一致してないけどね", elapsed_time_ms1/elapsed_time_ms2);
     return;
     
+
+    free(h_char);
+    cudaFree(d_char);
+    cudaFree(d_char_out);
+    cudaFree(d_char_outp);
+    cudaFree(d_charp);
+    cudaFree(d_filter);
+    cudaFree(d_wino);
 }
