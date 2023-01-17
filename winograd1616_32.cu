@@ -66,7 +66,7 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 }
 
 
-__global__ void winograd( signed char *input,  signed char *weight,  signed char  *output){
+__global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(32/2, 32/2) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
 	const int in_start = bx*2 + tx + (by*2+ty)*18 + tz*324;  //324 = 18*18
@@ -148,7 +148,7 @@ __global__ void winograd( signed char *input,  signed char *weight,  signed char
 		break;
 	}
 	// __syncthreads();
-	output[out_start] = clamp(((output_smem[tz][ty][tx] + (1 << 4)) >>5)) + 128;
+	output[out_start] = clamp(((output_smem[tz][ty][tx] + (1 << 6)) >>7)) + 128;
 }
 
 
@@ -169,33 +169,28 @@ __global__ void padding( signed char *input,  signed char *output){
 
 int main(){
     cudaEvent_t start, stop;
-    float elapsed_time_ms;
-     signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
-     signed char *h_filter = ( signed char *)malloc(FSIZE * sizeof( signed char));
-     signed char *h_wino = ( signed char *)malloc(WSIZE * sizeof( signed char));
+    float elapsed_time_ms1, elapsed_time_ms2;
+    signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
 
     initialData(h_char, SIZE);
-    initialData(h_filter, FSIZE);
-    initialData(h_wino, WSIZE);
-
     // allocate global memory
-    signed char *d_char, *d_char_out, *d_char_out1, *d_charp, *d_filter, *d_wino;
+    signed char *d_char, *d_char_out, *d_char_out1, *d_charp, *d_filter;
+    signed short *d_wino;
     cudaMalloc( (void **) &d_char, SIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_char_out, SIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_char_out1, SIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_charp, PSIZE * sizeof( signed char) );
     cudaMalloc( (void **) &d_filter, FSIZE * sizeof( signed char) );
-    cudaMalloc( (void **) &d_wino, WSIZE * sizeof( signed char) );
+    cudaMalloc( (void **) &d_wino, WSIZE * sizeof( signed short) );
 
     cudaMemcpy( d_char, h_char, SIZE * sizeof( signed char), cudaMemcpyHostToDevice );
-    cudaMemcpy( d_filter, h_filter, FSIZE * sizeof( signed char), cudaMemcpyHostToDevice );
-    cudaMemcpy( d_wino, h_wino, WSIZE * sizeof( signed char), cudaMemcpyHostToDevice );
 
     signed char f;
+    signed short f_short;
 	FILE* fp;
     signed char x1_1[FSIZE];
-    signed char wino[WSIZE];
-    fp = fopen( "./layer2.0.conv2.weight", "rb" );
+    signed short wino[WSIZE];
+    fp = fopen( "./params/layer2.0.conv2.weight", "rb" );
     if (!fp) printf("x1_1: pathを間違えています\n");
     for(int i=0; i<FSIZE; i++){
         if( fread( &f, sizeof(f), 1, fp ) < 1 ){
@@ -204,20 +199,20 @@ int main(){
         }
         x1_1[i] = f;
     }
-    cudaMemcpy(d_filter, x1_1, sizeof( signed char) * FSIZE, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_filter, x1_1, sizeof(signed char) * FSIZE, cudaMemcpyHostToDevice);
     if (fp) fclose(fp);
 
 
-    fp = fopen( "./wino_params/layer2.0.conv2.weight", "rb" );
+    fp = fopen( "./wino_params_short/layer2.0.conv2.weight", "rb" );
     if (!fp) printf("wino: pathを間違えています\n");
     for(int i=0; i<WSIZE; i++){
-        if( fread( &f, sizeof(f), 1, fp ) < 1 ){
+        if( fread( &f_short, sizeof(f_short), 1, fp ) < 1 ){
             fputs( "wino: 読み込み中にエラーが発生しました。\n", stderr );
             exit( EXIT_FAILURE );
         }
-        wino[i] = f;
+        wino[i] = f_short;
     }
-    cudaMemcpy(d_wino, wino, sizeof(signed char) * WSIZE, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_wino, wino, sizeof(signed short) * WSIZE, cudaMemcpyHostToDevice);
     if (fp) fclose(fp);
     
 
@@ -227,16 +222,16 @@ int main(){
     cudaEventRecord(start, 0);
 
     for(int i=0; i<1000; i++) conv<<<32, 256>>>(d_char, d_filter, d_char_out);
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms1, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("normal:%f\n", elapsed_time_ms);
+    printf("normal:%f\n", elapsed_time_ms1);
 
     signed char res[SIZE];
-    cudaMemcpy(res, d_char_out, sizeof( signed char) * SIZE, cudaMemcpyDeviceToHost);
+    cudaMemcpy(res, d_char_out, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);
     for(int i=0; i<32; i++) printf("%d, ", res[i]);
     printf("\n");
 
@@ -244,21 +239,17 @@ int main(){
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-
-    // make_wino<<<16, dim3(4,4,16)>>>(d_filter, f_wino);
-    // padding<<<16, dim3(32,32)>>>(d_char, d_charp);
-	// winograd<<<dim3(16, 16), dim3(4,4,16)>>>(d_charp, d_wino, d_char_out1);
     for(int i=0; i<1000; i++){
         padding<<<32, dim3(16,16)>>>(d_char, d_charp);
 		winograd<<<dim3(8, 8), dim3(4,4,32)>>>(d_charp, d_wino, d_char_out1);
     } 
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms2, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("winograd:%f\n", elapsed_time_ms);
+    printf("winograd:%f\n", elapsed_time_ms2);
     
     signed char res1[SIZE];
     cudaMemcpy(res1, d_char_out1, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);

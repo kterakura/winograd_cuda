@@ -80,13 +80,10 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
     const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
 	const int in_start = bx*2 + tx + (by*2+ty)*10 + tz*100;  //100 = 10*10
-	const int out_start = ((bx<<1) + tx +1) + (((by<<1)+ty +1)*10) + (tz*100);  //64 = 8*8
     
-
 	__shared__ signed char input_smem [64][4][4];
 	__shared__ int Btd [64][4][4];
 	__shared__ int BtdB [64][4][4];
-	__shared__ int AtI [64][2][4];
 	__shared__ int I [64][4][4];
 	
 	I[tz][ty][tx] = 0;
@@ -140,31 +137,6 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
         output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
     }
-
-	// if(ty > 1) return;
-	// switch (ty)
-	// {
-	// case 0:
-	// 	AtI[tz][ty][tx] = I[tz][0][tx] + I[tz][1][tx] + I[tz][2][tx];
-	// 	break;
-	// case 1:
-	// 	AtI[tz][ty][tx] = I[tz][1][tx] - I[tz][2][tx] - I[tz][3][tx];
-	// 	break;
-	// }
-	// // __syncthreads();
-
-	// if(tx > 1) return;
-	// switch (tx)
-	// {
-	// case 0:
-    //     output[out_start] = clamp((((AtI[tz][ty][0] + AtI[tz][ty][1] + AtI[tz][ty][2]) + (1 << 6)) >>7)) + 128;
-	// 	break;
-	// case 1:
-    //     output[out_start] = clamp((((AtI[tz][ty][1] - AtI[tz][ty][2] - AtI[tz][ty][3]) + (1 << 6)) >>7)) + 128;
-	// 	break;
-	// }
-	// __syncthreads();
-	// output[out_start] = clamp(((output_smem[tz][ty][tx] + (1 << 6)) >>7)) + 128;
 }
 
 
@@ -208,7 +180,7 @@ int main(){
 	FILE* fp;
     signed char x1_1[FSIZE];
     signed short wino[WSIZE];
-    fp = fopen( "./layer3.0.conv2.weight", "rb" );
+    fp = fopen( "./params/layer3.0.conv2.weight", "rb" );
     if (!fp) printf("x1_1: pathを間違えています\n");
     for(int i=0; i<FSIZE; i++){
         if( fread( &f, sizeof(f), 1, fp ) < 1 ){

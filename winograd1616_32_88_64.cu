@@ -74,13 +74,12 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
     
 
 	__shared__ signed char input_smem [32][4][4];
-	__shared__ int output_smem [64][2][2];
 	__shared__ int Btd [32][4][4];
 	__shared__ int BtdB [32][4][4];
-	__shared__ int AtI [64][2][4];
 	__shared__ int I [64][4][4];
 	
-	I[tz][ty][tx] = 0;
+	I[2*tz][ty][tx] = 0;
+	I[2*tz+1][ty][tx] = 0;
 	input_smem[tz][ty][tx] = input[in_start];
 	// __syncthreads();
 	switch (ty)
@@ -120,12 +119,10 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
 	}
 
-    // __syncthreads();
-    if(tx == 0 && ty == 0) {
-        const int out_start1 = (bx+1) + ((by+1)*10) + ((2*tz)*100);
-        const int out_start2 = (bx+1) + ((by+1)*10) + ((2*tz + 1)*100);
-        output[out_start1] = clamp((((I[2*tz][0][0] + I[2*tz][0][1] + I[2*tz][0][2] + I[2*tz][1][0] + I[2*tz][1][1] + I[2*tz][1][2] + I[2*tz][2][0] + I[2*tz][2][1] + I[2*tz][2][2]) + (1 << 6)) >>7)) + 128;
-        output[out_start2] = clamp((((I[2*tz + 1][0][0] + I[2*tz + 1][0][1] + I[2*tz + 1][0][2] + I[2*tz + 1][1][0] + I[2*tz + 1][1][1] + I[2*tz + 1][1][2] + I[2*tz + 1][2][0] + I[2*tz + 1][2][1] + I[2*tz + 1][2][2]) + (1 << 6)) >>7)) + 128;
+    __syncthreads();
+    if(id < 64) {
+        const int out_start1 = (bx+1) + ((by+1)*10) + ((id)*100);
+        output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
     }
 	
 }
@@ -148,7 +145,7 @@ __global__ void padding( signed char *input,  signed char *output){
 
 int main(){
     cudaEvent_t start, stop;
-    float elapsed_time_ms;
+    float elapsed_time_ms1, elapsed_time_ms2;
      signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
 
     initialData(h_char, SIZE);
@@ -170,7 +167,7 @@ int main(){
 	FILE* fp;
     signed char x1_1[FSIZE];
     signed short wino[WSIZE];
-    fp = fopen( "./layer3.0.conv1.weight", "rb" );
+    fp = fopen( "./params/layer3.0.conv1.weight", "rb" );
     if (!fp) printf("x1_1: pathを間違えています\n");
     for(int i=0; i<FSIZE; i++){
         if( fread( &f, sizeof(f), 1, fp ) < 1 ){
@@ -205,18 +202,16 @@ int main(){
         // cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
         conv<<<64, 256>>>(d_char, d_filter, d_char_out);
     }
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms1, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("normal:%f\n", elapsed_time_ms);
+    printf("normal:%f\n", elapsed_time_ms1);
 
     signed char res[OUTSIZE];
     cudaMemcpy(res, d_char_out, sizeof(signed char) * OUTSIZE, cudaMemcpyDeviceToHost);
-    for(int i=0; i<32; i++) printf("%d, ", res[i]);
-    printf("\n");
 
     //Measure load store uint8
     padding<<<32, dim3(16,16)>>>(d_char, d_charp);
@@ -227,19 +222,32 @@ int main(){
         cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
 		winograd<<<dim3(8, 8), dim3(4,4,32)>>>(d_charp, d_wino, d_char_outp);
     } 
-    elapsed_time_ms=0.0f;
+    elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop);
+    cudaEventElapsedTime(&elapsed_time_ms2, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    printf("winograd:%f\n", elapsed_time_ms);
+    printf("winograd:%f\n", elapsed_time_ms2);
     
     signed char res1[POUTSIZE];
     cudaMemcpy(res1, d_char_outp, sizeof(signed char) * POUTSIZE, cudaMemcpyDeviceToHost);
-    for(int i=11; i<32; i++) printf("%d, ", char (res1[i]));
-    printf("\n");
 
+    //check data
+    signed char resp[POUTSIZE] = {0};
+    for(int i=0;i<64;i++){
+        for (int j=0;j<8; j++){
+            for (int k=0;k<8; k++){
+                resp[j+1 + (k+1)*10 + i*100] = res[j + k*8 + i*64];
+            }
+        }
+    }
+
+    int miss = 0;
+    for(int i=0;i<POUTSIZE; i++) if(resp[i] != res1[i]) {printf("%d ", i); miss++;}
+    // for(int i=0;i<POUTSIZE; i++) if(resp[i] != res1[i]) {miss++;}
+    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    else if(miss != 0) printf("bat!");
 
     free(h_char );
     cudaFree(d_char);
