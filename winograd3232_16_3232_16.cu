@@ -220,52 +220,41 @@ int main(){
     cudaMemcpy(d_wino, wino, sizeof(signed short) * 16*16*4*4, cudaMemcpyHostToDevice);
     if (fp) fclose(fp);
     
+    //Measure
+    padding<<<16, dim3(32,32)>>>(d_char, d_charp);
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+
+    cudaMemset(&d_char_outp, 0, sizeof(signed char)*(34*34*16));
+    winograd<<<dim3(16, 16), dim3(4,4,16)>>>(d_charp, d_wino, d_char_outp);
+    elapsed_time_ms2=0.0f;
+    cudaEventRecord(stop, 0);
+    cudaDeviceSynchronize();
+    cudaEventElapsedTime(&elapsed_time_ms2, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    printf("winograd:%f\n", elapsed_time_ms2);
 
     //Measure
-    float time1 = 0;
-    for(int i=0; i<1000; i++){
-        cudaEventCreate(&start);
-        cudaEventCreate(&stop);
-        cudaEventRecord(start, 0);
-        conv<<<16*2, 256>>>(d_char, d_filter, d_char_out);
-        elapsed_time_ms1=0.0f;
-        cudaEventRecord(stop, 0);
-        cudaDeviceSynchronize();
-        cudaEventElapsedTime(&elapsed_time_ms1, start, stop);
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        if(i >= 100)time1 += elapsed_time_ms1;
-    }
-    printf("normal:%f\n", time1);
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+    conv<<<16*2, 256>>>(d_char, d_filter, d_char_out);
+    elapsed_time_ms1=0.0f;
+    cudaEventRecord(stop, 0);
+    cudaDeviceSynchronize();
+    cudaEventElapsedTime(&elapsed_time_ms1, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    printf("normal:%f\n", elapsed_time_ms1);
 
     signed char res[32*32*16];
     cudaMemcpy(res, d_char_out, sizeof( signed char) * 32*32*16, cudaMemcpyDeviceToHost);
-    
-
-    //Measure
-    float time2 = 0;
-    for(int i=0; i<1000; i++){
-        padding<<<16, dim3(32,32)>>>(d_char, d_charp);
-        cudaEventCreate(&start);
-        cudaEventCreate(&stop);
-        cudaEventRecord(start, 0);
-
-        cudaMemset(&d_char_outp, 0, sizeof(signed char)*(34*34*16));
-		winograd<<<dim3(16, 16), dim3(4,4,16)>>>(d_charp, d_wino, d_char_outp);
-        elapsed_time_ms2=0.0f;
-        cudaEventRecord(stop, 0);
-        cudaDeviceSynchronize();
-        cudaEventElapsedTime(&elapsed_time_ms2, start, stop);
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        if(i >= 100)time2 += elapsed_time_ms2;
-    } 
-    printf("winograd:%f\n", time2);
-    
     signed char res1[34*34*16];
     cudaMemcpy(res1, d_char_outp, sizeof(signed char) * 34*34*16, cudaMemcpyDeviceToHost);
 
-    //check data
+    //check result
     signed char resp[PSIZE] = {0};
     for(int i=0;i<16;i++){
         for (int j=0;j<32; j++){
@@ -278,9 +267,9 @@ int main(){
     int miss = 0;
     for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i]) {printf("%d ", i); miss++;}
     // for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i]) {miss++;}
-    if(miss == 0) printf("%f 倍速くなりました。", time1/time2);
+    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
     else if(miss != 0) printf("bat!");
 
-    return;
+    return 0;
     
 }
