@@ -222,8 +222,8 @@ int main(){
     //check result
     int miss = 0;
     for(int i=0;i<PSIZE; i++) if(res[i] != res1[i]) {printf("%d ", i); miss++;}
-    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/time2);
-    else if(miss != 0) printf("%f 倍速くなりました。答え一致してないけどね", elapsed_time_ms1/time2);
+    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    else if(miss != 0) printf("%f 倍速くなりました。答え一致してないけどね", elapsed_time_ms1/elapsed_time_ms2);
     
     free(h_char);
     cudaFree(d_char);
