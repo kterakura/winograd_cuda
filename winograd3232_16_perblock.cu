@@ -100,7 +100,7 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 		break;
 	}
 	// __syncthreads();
-    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
+    const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
 	for(int i=id; i<4*4*16*16; i+=blockDim.x*blockDim.y*blockDim.z){
         const int ch = i>>8;
 		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);

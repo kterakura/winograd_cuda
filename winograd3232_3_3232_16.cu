@@ -68,9 +68,9 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
-    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
+    const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
-	const int in_start = bx*2 + tx + (by*2+ty)*34 + tz*1156;  //1156 = 34*34
+	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*34 + tz*1156;  //1156 = 34*34
 	
     
 
@@ -79,7 +79,7 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	__shared__ int BtdB [3][4][4];
 	__shared__ int I [16][4][4];
 	
-	for(int i=id; i<16*4*4; i+=48){
+	for(int i=id; i<256; i+=48){
         const int z = i>>4, y = (i&15)>>2, x = i&3;
         I[z][y][x] = 0;
     }
@@ -118,17 +118,17 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	}
 	__syncthreads();
 
-    for(int i=id; i<48*16; i+=48){
+    for(int i=id; i<768; i+=48){
         const int ch = i/48;
 		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
 	}
     __syncthreads();
     
     if(id < 16){
-        const int out_start1 = (bx*2+1) + ((by*2+1)*34) + ((id)*1156);
-        const int out_start2 = (bx*2+2) + ((by*2+1)*34) + ((id)*1156);
-        const int out_start3 = (bx*2+1) + ((by*2+2)*34) + ((id)*1156);
-        const int out_start4 = (bx*2+2) + ((by*2+2)*34) + ((id)*1156);
+        const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*34) + ((id)*1156);
+        const int out_start2 = ((bx<<1)+2) + (((by<<1)+1)*34) + ((id)*1156);
+        const int out_start3 = ((bx<<1)+1) + (((by<<1)+2)*34) + ((id)*1156);
+        const int out_start4 = ((bx<<1)+2) + (((by<<1)+2)*34) + ((id)*1156);
         output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
         output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
         output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;

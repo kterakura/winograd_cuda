@@ -76,9 +76,9 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(8/2, 8/2) dim3(4,4,64)
-    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
+    const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
-	const int in_start = bx*2 + tx + (by*2+ty)*10 + tz*100;  //100 = 10*10
+	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*10 + tz*100;  //100 = 10*10
     
 	__shared__ signed char input_smem [64][4][4];
 	__shared__ int Btd [64][4][4];

@@ -69,9 +69,9 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(8/2, 8/2) dim3(4,4,64)
-    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
+    const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
-	const int in_start = bx*2 + tx + (by*2+ty)*34 + tz*1156;  //1156 = 34*34
+	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*34 + tz*1156;  //1156 = 34*34
 	
     
 
@@ -116,7 +116,7 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 		break;
 	}
 	__syncthreads();
-	for(int i=id; i<256*32; i+=256){
+	for(int i=id; i<8192; i+=256){
         const int ch = i>>8;
 		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
 	}

@@ -68,15 +68,15 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 __global__ void winograd( signed char *input,  signed short *weight,  signed char *output){
 	// dim3(16) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x;
-    // const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
-    const int tx_ty = threadIdx.x + threadIdx.y*blockDim.x;
+    // const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
+    const int tx_ty = threadIdx.x + (threadIdx.y<<2);
 	__shared__ signed char input_smem[16][16][16];
 	__shared__ int BtdB[16][16][16];
 	__shared__ int I[16][16][4][4];
 	
     // input to smem
     for(int i=0; i<16; i++){
-        const int in_start = i*2+tx + (bx*2+ty)*34 + tz*1156;
+        const int in_start = (i<<1)+tx + ((bx<<1)+ty)*34 + tz*1156;
         input_smem[i][tz][tx_ty] = input[in_start];
         I[i][tz][ty][tx] = 0;
     }
@@ -111,10 +111,10 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
     // }
     __syncthreads();
     // if(bx==0&&tz==0) printf("%d ",I[0][0][ty][tx]);
-    const int out_start1 = (tx_ty*2+1) + ((bx*2+1)*34) + ((tz)*1156);
-    const int out_start2 = (tx_ty*2+2) + ((bx*2+1)*34) + ((tz)*1156);
-    const int out_start3 = (tx_ty*2+1) + ((bx*2+2)*34) + ((tz)*1156);
-    const int out_start4 = (tx_ty*2+2) + ((bx*2+2)*34) + ((tz)*1156);
+    const int out_start1 = ((tx_ty<<1)+1) + (((bx<<1)+1)*34) + ((tz)*1156);
+    const int out_start2 = ((tx_ty<<1)+2) + (((bx<<1)+1)*34) + ((tz)*1156);
+    const int out_start3 = ((tx_ty<<1)+1) + (((bx<<1)+2)*34) + ((tz)*1156);
+    const int out_start4 = ((tx_ty<<1)+2) + (((bx<<1)+2)*34) + ((tz)*1156);
     output[out_start1] = clamp((((I[tz][tx_ty][0][0] + I[tz][tx_ty][0][1] + I[tz][tx_ty][0][2] + I[tz][tx_ty][1][0] + I[tz][tx_ty][1][1] + I[tz][tx_ty][1][2] + I[tz][tx_ty][2][0] + I[tz][tx_ty][2][1] + I[tz][tx_ty][2][2]) + (1 << 6)) >>7)) + 128;
     output[out_start2] = clamp((((I[tz][tx_ty][0][1] - I[tz][tx_ty][0][2] - I[tz][tx_ty][0][3] + I[tz][tx_ty][1][1] - I[tz][tx_ty][1][2] - I[tz][tx_ty][1][3] + I[tz][tx_ty][2][1] - I[tz][tx_ty][2][2] - I[tz][tx_ty][2][3]) + (1 << 6)) >>7)) + 128;
     output[out_start3] = clamp((((I[tz][tx_ty][1][0] + I[tz][tx_ty][1][1] + I[tz][tx_ty][1][2] - I[tz][tx_ty][2][0] - I[tz][tx_ty][2][1] - I[tz][tx_ty][2][2] - I[tz][tx_ty][3][0] - I[tz][tx_ty][3][1] - I[tz][tx_ty][3][2]) + (1 << 6)) >>7)) + 128;
