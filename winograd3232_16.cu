@@ -68,7 +68,7 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
 __global__ void winograd( signed char *input,  signed short *weight,  signed char *output){
 	// dim3(16) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x;
-    const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
+    // const int id = threadIdx.x + threadIdx.y*blockDim.x + threadIdx.z*blockDim.x*blockDim.y;
     const int tx_ty = threadIdx.x + threadIdx.y*blockDim.x;
 	__shared__ signed char input_smem[16][16][16];
 	__shared__ int BtdB[16][16][16];
