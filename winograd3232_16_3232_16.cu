@@ -109,89 +109,52 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	// dim3(32/2, 32/2) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
 	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*34 + tz*1156;  //1156 = 34*34
+    const int x_y = tx + (ty<<2);
 
 	// dim3(32/2, 32/2, 16) dim3(16,4,4)
 	// const int in_start = tx + ((ty + (bx<<1))<<4) + (tz + (by<<1))*544;  //1156 = 34*34
 
 
-	__shared__ signed char input_smem [16][4][4];
-	__shared__ int Btd [16][4][4];
-	__shared__ int BtdB [16][4][4];
+	__shared__ signed char input_smem [16][16];
+	__shared__ int BtdB [16][16];
 	__shared__ int I [16][4][4];
 	
 	I[tz][ty][tx] = 0;
-	input_smem[tz][ty][tx] = input[in_start];
-	// __syncthreads();
-	switch (ty)
-	{
-	case 0:
-		Btd [tz][ty][tx] = input_smem[tz][tx][0] - input_smem[tz][tx][2];
-		break;
-	case 1:
-		Btd [tz][ty][tx] = input_smem[tz][tx][1] + input_smem[tz][tx][2];
-		break;
-	case 2:
-		Btd [tz][ty][tx] = - input_smem[tz][tx][1] + input_smem[tz][tx][2];
-		break;
-	case 3:
-		Btd [tz][ty][tx] = input_smem[tz][tx][1] - input_smem[tz][tx][3];
-		break;
-	}
-	// __syncthreads();
-	switch (tx)
-	{
-	case 0:
-		BtdB[tz][tx][ty] = Btd[tz][ty][0] - Btd[tz][ty][2];
-		break;
-	case 1:
-		BtdB[tz][tx][ty] = Btd[tz][ty][1] + Btd[tz][ty][2];
-		break;
-	case 2:
-		BtdB[tz][tx][ty] = - Btd[tz][ty][1] + Btd[tz][ty][2];
-		break;
-	case 3:
-		BtdB[tz][tx][ty] = Btd[tz][ty][1] - Btd[tz][ty][3];
-		break;
-	}
-	// __syncthreads();
-    const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
-	// for(int i=id; i<4096; i+=256){
-    //     const int ch = i>>8;
-	// 	atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
-	// }
+	input_smem[tz][x_y] = input[in_start];
+    const int id = x_y + (threadIdx.z<<4);
+    if(id < 16){
+        BtdB[id][0] = input_smem[id][0]-input_smem[id][8]-input_smem[id][2]+input_smem[id][10];
+        BtdB[id][1] = input_smem[id][1]-input_smem[id][9]+input_smem[id][2]-input_smem[id][10];
+        BtdB[id][2] = -input_smem[id][1]+input_smem[id][9]+input_smem[id][2]-input_smem[id][10];
+        BtdB[id][3] = input_smem[id][1]-input_smem[id][9]-input_smem[id][3]+input_smem[id][11];
+        BtdB[id][4] = input_smem[id][4]+input_smem[id][8]-input_smem[id][6]-input_smem[id][10];
+        BtdB[id][5] = input_smem[id][5]+input_smem[id][9]+input_smem[id][6]+input_smem[id][10];
+        BtdB[id][6] = -input_smem[id][5]-input_smem[id][9]+input_smem[id][6]+input_smem[id][10];
+        BtdB[id][7] = input_smem[id][5]+input_smem[id][9]-input_smem[id][7]-input_smem[id][11];
+        BtdB[id][8] = -input_smem[id][4]+input_smem[id][8]+input_smem[id][6]-input_smem[id][10];
+        BtdB[id][9] = -input_smem[id][5]+input_smem[id][9]-input_smem[id][6]+input_smem[id][10];
+        BtdB[id][10] = input_smem[id][5]-input_smem[id][9]-input_smem[id][6]+input_smem[id][10];
+        BtdB[id][11] = -input_smem[id][5]+input_smem[id][9]+input_smem[id][7]-input_smem[id][11];
+        BtdB[id][12] = input_smem[id][4]-input_smem[id][12]-input_smem[id][6]+input_smem[id][14];
+        BtdB[id][13] = input_smem[id][5]-input_smem[id][13]+input_smem[id][6]-input_smem[id][14];
+        BtdB[id][14] = -input_smem[id][5]+input_smem[id][13]+input_smem[id][6]-input_smem[id][14];
+        BtdB[id][15] = input_smem[id][5]-input_smem[id][13]-input_smem[id][7]+input_smem[id][15];
+    }
+
     for(int i=0; i<16; i++){
-        atomicAdd(&I[i][ty][tx], BtdB[tz][ty][tx]*weight[id + (i<<8)]);
+        atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<8)]);
     }
     __syncthreads();
-    if(id < 64){
-        const int x = id&1, y = (id&3)>>1, z = id>>2, temp = (y << 1) | x;
-        const int out_start = ((bx<<1)+x+1) + (((by<<1)+y+1)*34) + ((z)*1156);
-        switch (temp)
-        {
-        case 0:
-            output[out_start] = clamp((((I[z][0][0] + I[z][0][1] + I[z][0][2] + I[z][1][0] + I[z][1][1] + I[z][1][2] + I[z][2][0] + I[z][2][1] + I[z][2][2]) + (1 << 6)) >>7)) + 128;
-            break;
-        case 1:
-            output[out_start] = clamp((((I[z][0][1] - I[z][0][2] - I[z][0][3] + I[z][1][1] - I[z][1][2] - I[z][1][3] + I[z][2][1] - I[z][2][2] - I[z][2][3]) + (1 << 6)) >>7)) + 128;
-            break;
-        case 2:
-            output[out_start] = clamp((((I[z][1][0] + I[z][1][1] + I[z][1][2] - I[z][2][0] - I[z][2][1] - I[z][2][2] - I[z][3][0] - I[z][3][1] - I[z][3][2]) + (1 << 6)) >>7)) + 128;
-            break;
-        case 3:
-            output[out_start] = clamp((((I[z][1][1] - I[z][1][2] - I[z][1][3] - I[z][2][1] + I[z][2][2] + I[z][2][3] - I[z][3][1] + I[z][3][2] + I[z][3][3]) + (1 << 6)) >>7)) + 128;
-            break;
-        }
+    if(id < 16) {
+        const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*34) + ((id)*1156);
+        const int out_start2 = ((bx<<1)+2) + (((by<<1)+1)*34) + ((id)*1156);
+        const int out_start3 = ((bx<<1)+1) + (((by<<1)+2)*34) + ((id)*1156);
+        const int out_start4 = ((bx<<1)+2) + (((by<<1)+2)*34) + ((id)*1156);
+        output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
+        output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
+        output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
     }
-    // if(id < 16) {
-    //     const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*34) + ((id)*1156);
-    //     const int out_start2 = ((bx<<1)+2) + (((by<<1)+1)*34) + ((id)*1156);
-    //     const int out_start3 = ((bx<<1)+1) + (((by<<1)+2)*34) + ((id)*1156);
-    //     const int out_start4 = ((bx<<1)+2) + (((by<<1)+2)*34) + ((id)*1156);
-    //     output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
-    //     output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
-    //     output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
-    //     output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
-    // }
 
 	// if(ty > 1) return;
 	// switch (ty)
