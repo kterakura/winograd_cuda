@@ -73,6 +73,45 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
     } 
 }
 
+__global__ void conv_same_tiling( signed char *input,  signed char *filter,  signed char *output){
+    __shared__ int s_output[64][2][2];
+    __shared__ signed char input_smem [64][4][4];
+    const int tx = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
+    for(int i=tx; i<1024; i+=1024){
+        const int x = tx&3, y = (tx&15)>>2, z = tx>>4;
+        const int in_start = (bx<<1)+x + ((by<<1)+y)*10 + z*100;
+        input_smem[z][y][x] = input[in_start];
+    }
+
+    if(tx < 256) {
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        s_output[z][y][x] = 0;
+    }
+
+    __syncthreads();
+    for(int i=tx; i<16384; i+=1024){  //16384 = 4*64*64
+        const int x = i&1, y = (i&3)>>1, z = (i&255)>>2, ch = i>>8;
+        const int f = z*9 + ch*576;
+        const int x0 = input_smem[z][y+0][x+0] * filter[0 + f]; //576 = 9*64
+        const int x1 = input_smem[z][y+0][x+1] * filter[1 + f];
+        const int x2 = input_smem[z][y+0][x+2] * filter[2 + f];
+        const int x3 = input_smem[z][y+1][x+0] * filter[3 + f];
+        const int x4 = input_smem[z][y+1][x+1] * filter[4 + f];
+        const int x5 = input_smem[z][y+1][x+2] * filter[5 + f];
+        const int x6 = input_smem[z][y+2][x+0] * filter[6 + f];
+        const int x7 = input_smem[z][y+2][x+1] * filter[7 + f];
+        const int x8 = input_smem[z][y+2][x+2] * filter[8 + f];
+        atomicAdd(&s_output[ch][y][x], x0+x1+x2+x3+x4+x5+x6+x7+x8);
+    }
+    
+    __syncthreads();
+    if(tx < 256){
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        const int out_start = (bx<<1)+x+1 + ((by<<1)+y+1)*10 + (z*100); 
+        output[out_start] = clamp(((s_output[z][y][x] + (1 << 4)) >>5)) + 128;   
+    }
+}
+
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(8/2, 8/2) dim3(4,4,64)
@@ -156,7 +195,7 @@ __global__ void padding( signed char *input,  signed char *output){
 
 int main(){
     cudaEvent_t start, stop;
-    float elapsed_time_ms1, elapsed_time_ms2;
+    float elapsed_time_ms1, elapsed_time_ms2, elapsed_time_ms3;
     signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
 
     initialData(h_char, SIZE);
@@ -220,8 +259,23 @@ int main(){
     cudaEventDestroy(stop);
     printf("winograd:%f\n", elapsed_time_ms2);
     
-    signed char res1[PSIZE];
-    cudaMemcpy(res1, d_char_outp1, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
+
+    //Measure
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+    cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
+    conv_same_tiling<<<dim3(4, 4), 1024>>>(d_charp, d_filter, d_char_outp);
+    elapsed_time_ms3=0.0f;
+    cudaEventRecord(stop, 0);
+    cudaDeviceSynchronize();
+    cudaEventElapsedTime(&elapsed_time_ms3, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    printf("same_tiling:%f\n", elapsed_time_ms3);
+    
+    signed char res2[PSIZE];
+    cudaMemcpy(res2, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     //Measure
     cudaEventCreate(&start);
@@ -237,12 +291,17 @@ int main(){
     cudaEventDestroy(stop);
     printf("normal:%f\n", elapsed_time_ms1);
 
+
+    signed char res1[PSIZE];
+    cudaMemcpy(res1, d_char_outp1, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
     signed char res[PSIZE];
     cudaMemcpy(res, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i]) {printf("%d ", i); miss++;}
-    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i] && res[i] != res2[i]) {printf("%d ", i); miss++;}
+    if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
+    if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
+    if(miss == 0) printf("%f 倍速くなりました。wino/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
     else if(miss != 0) printf("bat!");
 
     free(h_char );

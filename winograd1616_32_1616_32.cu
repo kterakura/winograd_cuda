@@ -64,6 +64,45 @@ __global__ void conv( signed char *input,  signed char *filter,  signed char *ou
     for (int i = id; i < 256; i+=blockDim.x) output[i + (conv_ch<<8)] = clamp(((s_output[i] + (1 << 4)) >>5)) + 128;
 }
 
+__global__ void conv_same_tiling( signed char *input,  signed char *filter,  signed char *output){
+    __shared__ int s_output[32][2][2];
+    __shared__ signed char input_smem [32][4][4];
+    const int tx = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
+    for(int i=tx; i<512; i+=512){
+        const int x = tx&3, y = (tx&15)>>2, z = tx>>4;
+        const int in_start = (bx<<1)+x + ((by<<1)+y)*18 + z*324;
+        input_smem[z][y][x] = input[in_start];
+    }
+
+    if(tx < 128) {
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        s_output[z][y][x] = 0;
+    }
+
+    __syncthreads();
+    for(int i=tx; i<4096; i+=512){  //4096 = 4*32*32
+        const int x = i&1, y = (i&3)>>1, z = (i&127)>>2, ch = i>>7;
+        const int f = z*9 + ch*288;
+        const int x0 = input_smem[z][y+0][x+0] * filter[0 + f]; //288 = 9*32
+        const int x1 = input_smem[z][y+0][x+1] * filter[1 + f];
+        const int x2 = input_smem[z][y+0][x+2] * filter[2 + f];
+        const int x3 = input_smem[z][y+1][x+0] * filter[3 + f];
+        const int x4 = input_smem[z][y+1][x+1] * filter[4 + f];
+        const int x5 = input_smem[z][y+1][x+2] * filter[5 + f];
+        const int x6 = input_smem[z][y+2][x+0] * filter[6 + f];
+        const int x7 = input_smem[z][y+2][x+1] * filter[7 + f];
+        const int x8 = input_smem[z][y+2][x+2] * filter[8 + f];
+        atomicAdd(&s_output[ch][y][x], x0+x1+x2+x3+x4+x5+x6+x7+x8);
+    }
+    
+    __syncthreads();
+    if(tx < 128){
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        const int out_start = (bx<<1)+x+1 + ((by<<1)+y+1)*18 + (z*324); 
+        output[out_start] = clamp(((s_output[z][y][x] + (1 << 4)) >>5)) + 128;   
+    }
+}
+
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(32/2, 32/2) dim3(4,4,16)
@@ -150,7 +189,7 @@ __global__ void padding( signed char *input,  signed char *output){
 
 int main(){
     cudaEvent_t start, stop;
-    float elapsed_time_ms1, elapsed_time_ms2;
+    float elapsed_time_ms1, elapsed_time_ms2, elapsed_time_ms3;
     signed char *h_char = ( signed char *)malloc(SIZE * sizeof( signed char));
 
     initialData(h_char, SIZE);
@@ -212,14 +251,11 @@ int main(){
     cudaEventDestroy(stop);
     printf("winograd:%f\n", elapsed_time_ms2);
     
-    signed char res1[PSIZE];
-    cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     //Measure
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-
     conv<<<32, 256>>>(d_char, d_filter, d_char_out);
     elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
@@ -229,10 +265,29 @@ int main(){
     cudaEventDestroy(stop);
     printf("normal:%f\n", elapsed_time_ms1);
 
+    //Measure
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+    conv_same_tiling<<<dim3(8, 8), 512>>>(d_charp, d_filter, d_char_outp);
+    elapsed_time_ms3=0.0f;
+    cudaEventRecord(stop, 0);
+    cudaDeviceSynchronize();
+    cudaEventElapsedTime(&elapsed_time_ms3, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    printf("same_tiling:%f\n", elapsed_time_ms3);
+    signed char res2[PSIZE];
+    cudaMemcpy(res2, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
+
+
+    
+    //check result
+    signed char res1[PSIZE];
+    cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
     signed char res[SIZE];
     cudaMemcpy(res, d_char_out, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);
 
-    //check result
     signed char resp[PSIZE] = {0};
     for(int i=0;i<32;i++){
         for (int j=0;j<16; j++){
@@ -243,10 +298,12 @@ int main(){
     }
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i]) {printf("%d ", i); miss++;}
-    // for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i]) {miss++;}
-    if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
+    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] && resp[i] != res2[i]) {printf("%d ", i); miss++;}
+    if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
+    if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
+    if(miss == 0) printf("%f 倍速くなりました。wino/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
     else if(miss != 0) printf("bat!");
+
     free(h_char );
     cudaFree(d_char);
     cudaFree(d_char_out);

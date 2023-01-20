@@ -26,34 +26,42 @@ __device__  signed char clamp(int v)
 
 
 __global__ void conv( signed char *input,  signed char *filter,  signed char *output){
-    // input = (10,10,64), output =(8,8,64), filter =(3,3,64,64)
-    
-    __shared__ int s_output[64];
-    __shared__ signed char input_smem [64][9];
-    const int tz = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
-    for(int i=0; i<9; i++){
-        const int x = i%3, y = i/3;
-        const int in_start = bx+x + (by+y)*10 + tz*100;  //100 = 10*10
-        input_smem[tz][i] = input[in_start];
+    __shared__ int s_output[64][2][2];
+    __shared__ signed char input_smem [64][4][4];
+    const int tx = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
+    for(int i=tx; i<1024; i+=1024){
+        const int x = tx&3, y = (tx&15)>>2, z = tx>>4;
+        const int in_start = (bx<<1)+x + ((by<<1)+y)*10 + z*100;
+        input_smem[z][y][x] = input[in_start];
+    }
+
+    if(tx < 256) {
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        s_output[z][y][x] = 0;
+    }
+
+    __syncthreads();
+    for(int i=tx; i<16384; i+=1024){  //16384 = 4*64*64
+        const int x = i&1, y = (i&3)>>1, z = (i&255)>>2, ch = i>>8;
+        const int f = z*9 + ch*576;
+        const int x0 = input_smem[z][y+0][x+0] * filter[0 + f]; //576 = 9*64
+        const int x1 = input_smem[z][y+0][x+1] * filter[1 + f];
+        const int x2 = input_smem[z][y+0][x+2] * filter[2 + f];
+        const int x3 = input_smem[z][y+1][x+0] * filter[3 + f];
+        const int x4 = input_smem[z][y+1][x+1] * filter[4 + f];
+        const int x5 = input_smem[z][y+1][x+2] * filter[5 + f];
+        const int x6 = input_smem[z][y+2][x+0] * filter[6 + f];
+        const int x7 = input_smem[z][y+2][x+1] * filter[7 + f];
+        const int x8 = input_smem[z][y+2][x+2] * filter[8 + f];
+        atomicAdd(&s_output[ch][y][x], x0+x1+x2+x3+x4+x5+x6+x7+x8);
     }
     
-    s_output[tz] = 0;
     __syncthreads();
-    for(int i=0; i<64; i++){
-        const int x0 = input_smem[tz][0] * filter[0 + tz*9 + i*576];
-        const int x1 = input_smem[tz][1] * filter[1 + tz*9 + i*576];
-        const int x2 = input_smem[tz][2] * filter[2 + tz*9 + i*576];
-        const int x3 = input_smem[tz][3] * filter[3 + tz*9 + i*576];
-        const int x4 = input_smem[tz][4] * filter[4 + tz*9 + i*576];
-        const int x5 = input_smem[tz][5] * filter[5 + tz*9 + i*576];
-        const int x6 = input_smem[tz][6] * filter[6 + tz*9 + i*576];
-        const int x7 = input_smem[tz][7] * filter[7 + tz*9 + i*576];
-        const int x8 = input_smem[tz][8] * filter[8 + tz*9 + i*576];
-        atomicAdd(&s_output[i], x0+x1+x2+x3+x4+x5+x6+x7+x8);
+    if(tx < 256){
+        const int x = tx&1, y = (tx&3)>>1, z = tx>>2;
+        const int out_start = (bx<<1)+x+1 + ((by<<1)+y+1)*10 + (z*100); 
+        output[out_start] = clamp(((s_output[z][y][x] + (1 << 4)) >>5)) + 128;   
     }
-    __syncthreads();
-    const int out_start = bx+1 + (by+1)*10 + (tz*100);  //64 = 8*8
-    output[out_start] = clamp(((s_output[tz] + (1 << 4)) >>5)) + 128;
 }
 
 
@@ -193,7 +201,7 @@ int main(){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
-    conv<<<dim3(8, 8), dim3(64)>>>(d_charp, d_filter, d_char_outp);
+    conv<<<dim3(4, 4), dim3(1024)>>>(d_charp, d_filter, d_char_outp);
     elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -226,7 +234,7 @@ int main(){
     cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i]) {printf("%d ", i); miss++;}
+    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i]) {miss++;}
     if(miss == 0) printf("%f 倍速くなりました。", elapsed_time_ms1/elapsed_time_ms2);
     else if(miss != 0) printf("%f 倍速くなりました。答え一致してないけどね", elapsed_time_ms1/elapsed_time_ms2);
 
