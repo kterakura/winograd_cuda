@@ -110,11 +110,6 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
 	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*34 + tz*1156;  //1156 = 34*34
     const int x_y = tx + (ty<<2);
-
-	// dim3(32/2, 32/2, 16) dim3(16,4,4)
-	// const int in_start = tx + ((ty + (bx<<1))<<4) + (tz + (by<<1))*544;  //1156 = 34*34
-
-
 	__shared__ signed char input_smem [16][16];
 	__shared__ int BtdB [16][16];
 	__shared__ int I [16][4][4];
