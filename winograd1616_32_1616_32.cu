@@ -301,7 +301,7 @@ int main(){
     for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] && resp[i] != res2[i]) {printf("%d ", i); miss++;}
     if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
-    if(miss == 0) printf("%f 倍速くなりました。wino/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
+    if(miss == 0) printf("%f 倍速くなりました。normal/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
     else if(miss != 0) printf("bat!");
 
     free(h_char );

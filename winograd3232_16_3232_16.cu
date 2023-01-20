@@ -155,21 +155,43 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	}
 	// __syncthreads();
     const int id = threadIdx.x + (threadIdx.y<<2) + (threadIdx.z<<4);
-	for(int i=id; i<4096; i+=256){
-        const int ch = i>>8;
-		atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
-	}
-    __syncthreads();
-    if(id < 16) {
-        const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*34) + ((id)*1156);
-        const int out_start2 = ((bx<<1)+2) + (((by<<1)+1)*34) + ((id)*1156);
-        const int out_start3 = ((bx<<1)+1) + (((by<<1)+2)*34) + ((id)*1156);
-        const int out_start4 = ((bx<<1)+2) + (((by<<1)+2)*34) + ((id)*1156);
-        output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
-        output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
-        output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
-        output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
+	// for(int i=id; i<4096; i+=256){
+    //     const int ch = i>>8;
+	// 	atomicAdd(&I[ch][ty][tx], BtdB[tz][ty][tx]*weight[i]);
+	// }
+    for(int i=0; i<16; i++){
+        atomicAdd(&I[i][ty][tx], BtdB[tz][ty][tx]*weight[id + (i<<8)]);
     }
+    __syncthreads();
+    if(id < 64){
+        const int x = id&1, y = (id&3)>>1, z = id>>2, temp = (y << 1) | x;
+        const int out_start = ((bx<<1)+x+1) + (((by<<1)+y+1)*34) + ((z)*1156);
+        switch (temp)
+        {
+        case 0:
+            output[out_start] = clamp((((I[z][0][0] + I[z][0][1] + I[z][0][2] + I[z][1][0] + I[z][1][1] + I[z][1][2] + I[z][2][0] + I[z][2][1] + I[z][2][2]) + (1 << 6)) >>7)) + 128;
+            break;
+        case 1:
+            output[out_start] = clamp((((I[z][0][1] - I[z][0][2] - I[z][0][3] + I[z][1][1] - I[z][1][2] - I[z][1][3] + I[z][2][1] - I[z][2][2] - I[z][2][3]) + (1 << 6)) >>7)) + 128;
+            break;
+        case 2:
+            output[out_start] = clamp((((I[z][1][0] + I[z][1][1] + I[z][1][2] - I[z][2][0] - I[z][2][1] - I[z][2][2] - I[z][3][0] - I[z][3][1] - I[z][3][2]) + (1 << 6)) >>7)) + 128;
+            break;
+        case 3:
+            output[out_start] = clamp((((I[z][1][1] - I[z][1][2] - I[z][1][3] - I[z][2][1] + I[z][2][2] + I[z][2][3] - I[z][3][1] + I[z][3][2] + I[z][3][3]) + (1 << 6)) >>7)) + 128;
+            break;
+        }
+    }
+    // if(id < 16) {
+    //     const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*34) + ((id)*1156);
+    //     const int out_start2 = ((bx<<1)+2) + (((by<<1)+1)*34) + ((id)*1156);
+    //     const int out_start3 = ((bx<<1)+1) + (((by<<1)+2)*34) + ((id)*1156);
+    //     const int out_start4 = ((bx<<1)+2) + (((by<<1)+2)*34) + ((id)*1156);
+    //     output[out_start1] = clamp((((I[id][0][0] + I[id][0][1] + I[id][0][2] + I[id][1][0] + I[id][1][1] + I[id][1][2] + I[id][2][0] + I[id][2][1] + I[id][2][2]) + (1 << 6)) >>7)) + 128;
+    //     output[out_start2] = clamp((((I[id][0][1] - I[id][0][2] - I[id][0][3] + I[id][1][1] - I[id][1][2] - I[id][1][3] + I[id][2][1] - I[id][2][2] - I[id][2][3]) + (1 << 6)) >>7)) + 128;
+    //     output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
+    //     output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
+    // }
 
 	// if(ty > 1) return;
 	// switch (ty)
@@ -295,7 +317,7 @@ int main(){
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-    conv<<<dim3(16, 16), 256>>>(d_charp, d_filter, d_char_outp);
+    conv_same_tiling<<<dim3(16, 16), 256>>>(d_charp, d_filter, d_char_outp);
     elapsed_time_ms3=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -323,7 +345,7 @@ int main(){
     for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] && resp[i] != res2[i]) {printf("%d ", i); miss++;}
     if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
-    if(miss == 0) printf("%f 倍速くなりました。wino/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
+    if(miss == 0) printf("%f 倍速くなりました。normal/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
     else if(miss != 0) printf("bat!");
 
     free(h_char );
