@@ -141,10 +141,15 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         BtdB[id][15] = input_smem[id][5]-input_smem[id][13]-input_smem[id][7]+input_smem[id][15];
     }
     __syncthreads();
-    for(int i=id; i<16384; i+=256){ //16384 = 4*4*32*32
-        const int ch = i>>9;
-		atomicAdd(&I[ch][ty][tx], BtdB[tz][x_y]*weight[i]);
-	}
+    for(int i=0; i<32; i++){
+        atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<9)]);
+        atomicAdd(&I[i][ty][tx], BtdB[tz + 16][x_y]*weight[id + 256 + (i<<9)]); 
+    }
+    // for(int i=id; i<16384; i+=256){ //16384 = 4*4*32*32
+    //     const int ch = i>>9;
+    //     const int x_y = i&15, z = (i&511)>>4;
+	// 	atomicAdd(&I[ch][ty][tx], BtdB[z][x_y]*weight[i]);
+	// }
 	__syncthreads();
     if(id < 32) {
         const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*18) + ((id)*324);

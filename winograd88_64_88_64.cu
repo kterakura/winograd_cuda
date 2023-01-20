@@ -150,12 +150,13 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
     }
     
     __syncthreads();
-    for(int i=id; i<65536; i+=256){  //65536 = 4*4*64*64  //1024 = blockDim.x*blockDim.y*blockDim.z
-        const int ch = i>>10;
-		atomicAdd(&I[ch][ty][tx], BtdB[tz][x_y]*weight[i]);
-	}
+    for(int i=0; i<64; i++){
+        atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<10)]);
+        atomicAdd(&I[i][ty][tx], BtdB[tz+16][x_y]*weight[id + 256 + (i<<10)]);
+        atomicAdd(&I[i][ty][tx], BtdB[tz+32][x_y]*weight[id + 512 + (i<<10)]);
+        atomicAdd(&I[i][ty][tx], BtdB[tz+48][x_y]*weight[id + 768+(i<<10)]);
+    }
     __syncthreads();
-    // const int temp = tx + (ty<<2);
     if(id < 64) {
         const int out_start1 = (bx*2+1) + ((by*2+1)*10) + ((id)*100);
         const int out_start2 = (bx*2+2) + ((by*2+1)*10) + ((id)*100);
