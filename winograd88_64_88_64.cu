@@ -77,8 +77,8 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
     __shared__ int s_output[64][2][2];
     __shared__ signed char input_smem [64][4][4];
     const int tx = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
-    for(int i=tx; i<1024; i+=1024){
-        const int x = tx&3, y = (tx&15)>>2, z = tx>>4;
+    for(int i=tx; i<1024; i+=256){
+        const int x = i&3, y = (i&15)>>2, z = i>>4;
         const int in_start = (bx<<1)+x + ((by<<1)+y)*10 + z*100;
         input_smem[z][y][x] = input[in_start];
     }
@@ -89,7 +89,7 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
     }
 
     __syncthreads();
-    for(int i=tx; i<16384; i+=1024){  //16384 = 4*64*64
+    for(int i=tx; i<16384; i+=256){  //16384 = 4*64*64
         const int x = i&1, y = (i&3)>>1, z = (i&255)>>2, ch = i>>8;
         const int f = z*9 + ch*576;
         const int x0 = input_smem[z][y+0][x+0] * filter[0 + f]; //576 = 9*64
@@ -114,17 +114,22 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
 
 
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
-	// dim3(8/2, 8/2) dim3(4,4,64)
+	// dim3(8/2, 8/2) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
-	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*10 + tz*100;  //100 = 10*10
+	const int in_start_xy = (bx<<1) + tx + ((by<<1)+ty)*10;  //100 = 10*10
     const int x_y = tx + (ty<<2);
     const int id = x_y + (threadIdx.z<<4);
 	__shared__ signed char input_smem [64][16];
 	__shared__ int BtdB [64][16];
 	__shared__ int I [64][4][4];
 	
-	I[tz][ty][tx] = 0;
-	input_smem[tz][x_y] = input[in_start];
+    for(int i=0; i < 4; i++){
+        const int in_start = in_start_xy + (tz+(i<<4))*100;
+	    input_smem[tz+(i<<4)][x_y] = input[in_start];
+	    I[tz+(i<<4)][ty][tx] = 0;
+    }
+    
+    __syncthreads();
     if(id < 64){
         BtdB[id][0] = input_smem[id][0]-input_smem[id][8]-input_smem[id][2]+input_smem[id][10];
         BtdB[id][1] = input_smem[id][1]-input_smem[id][9]+input_smem[id][2]-input_smem[id][10];
@@ -143,10 +148,12 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         BtdB[id][14] = -input_smem[id][5]+input_smem[id][13]+input_smem[id][6]-input_smem[id][14];
         BtdB[id][15] = input_smem[id][5]-input_smem[id][13]-input_smem[id][7]+input_smem[id][15];
     }
-
-    for(int i=0; i<64; i++){
-        atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<10)]);
-    }
+    
+    __syncthreads();
+    for(int i=id; i<65536; i+=256){  //65536 = 4*4*64*64  //1024 = blockDim.x*blockDim.y*blockDim.z
+        const int ch = i>>10;
+		atomicAdd(&I[ch][ty][tx], BtdB[tz][x_y]*weight[i]);
+	}
     __syncthreads();
     // const int temp = tx + (ty<<2);
     if(id < 64) {
@@ -234,7 +241,7 @@ int main(){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     cudaMemset(&d_char_outp1, 0, sizeof(signed char)*PSIZE);
-    winograd<<<dim3(4, 4), dim3(4,4,64)>>>(d_charp, d_wino, d_char_outp1);
+    winograd<<<dim3(4, 4), dim3(4,4,16)>>>(d_charp, d_wino, d_char_outp1);
     elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -249,7 +256,7 @@ int main(){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
-    conv_same_tiling<<<dim3(4, 4), 1024>>>(d_charp, d_filter, d_char_outp);
+    conv_same_tiling<<<dim3(4, 4), 256>>>(d_charp, d_filter, d_char_outp);
     elapsed_time_ms3=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -282,11 +289,11 @@ int main(){
     cudaMemcpy(res, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i] && res[i] != res2[i]) {printf("%d ", i); miss++;}
+    for(int i=0;i<PSIZE; i++) if(res[i] != res1[i] || res[i] != res2[i]) {miss++;}
     if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。normal/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
-    else if(miss != 0) printf("bat!");
+    else if(miss != 0) printf("miss = %d bat!", miss);
 
     free(h_char );
     cudaFree(d_char);

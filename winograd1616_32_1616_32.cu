@@ -68,8 +68,8 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
     __shared__ int s_output[32][2][2];
     __shared__ signed char input_smem [32][4][4];
     const int tx = threadIdx.x, bx = blockIdx.x, by = blockIdx.y;
-    for(int i=tx; i<512; i+=512){
-        const int x = tx&3, y = (tx&15)>>2, z = tx>>4;
+    for(int i=tx; i<512; i+=256){
+        const int x = i&3, y = (i&15)>>2, z = i>>4;
         const int in_start = (bx<<1)+x + ((by<<1)+y)*18 + z*324;
         input_smem[z][y][x] = input[in_start];
     }
@@ -80,7 +80,7 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
     }
 
     __syncthreads();
-    for(int i=tx; i<4096; i+=512){  //4096 = 4*32*32
+    for(int i=tx; i<4096; i+=256){  //4096 = 4*32*32
         const int x = i&1, y = (i&3)>>1, z = (i&127)>>2, ch = i>>7;
         const int f = z*9 + ch*288;
         const int x0 = input_smem[z][y+0][x+0] * filter[0 + f]; //288 = 9*32
@@ -107,15 +107,21 @@ __global__ void conv_same_tiling( signed char *input,  signed char *filter,  sig
 __global__ void winograd( signed char *input,  signed short *weight,  signed char  *output){
 	// dim3(32/2, 32/2) dim3(4,4,16)
     const int tx = threadIdx.x, ty = threadIdx.y, tz = threadIdx.z, bx = blockIdx.x, by = blockIdx.y;
-	const int in_start = (bx<<1) + tx + ((by<<1)+ty)*18 + tz*324;  //324 = 18*18
+	const int in_start_xy = (bx<<1) + tx + ((by<<1)+ty)*18;  //324 = 18*18
     const int x_y = tx + (ty<<2);
     const int id = x_y + (threadIdx.z<<4);
 	__shared__ signed char input_smem [32][16];
 	__shared__ int BtdB [32][16];
 	__shared__ int I [32][4][4];
 	
-	I[tz][ty][tx] = 0;
-	input_smem[tz][x_y] = input[in_start];
+	// I[tz][ty][tx] = 0;
+	// input_smem[tz][x_y] = input[in_start];
+    for(int i=0; i < 2; i++){
+        const int in_start = in_start_xy + (tz+(i<<4))*324;
+	    input_smem[tz+(i<<4)][x_y] = input[in_start];
+	    I[tz+(i<<4)][ty][tx] = 0;
+    }
+    __syncthreads();
     if(id < 32){
         BtdB[id][0] = input_smem[id][0]-input_smem[id][8]-input_smem[id][2]+input_smem[id][10];
         BtdB[id][1] = input_smem[id][1]-input_smem[id][9]+input_smem[id][2]-input_smem[id][10];
@@ -134,10 +140,11 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         BtdB[id][14] = -input_smem[id][5]+input_smem[id][13]+input_smem[id][6]-input_smem[id][14];
         BtdB[id][15] = input_smem[id][5]-input_smem[id][13]-input_smem[id][7]+input_smem[id][15];
     }
-
-    for(int i=0; i<32; i++){
-        atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<9)]);
-    }
+    __syncthreads();
+    for(int i=id; i<16384; i+=256){ //16384 = 4*4*32*32
+        const int ch = i>>9;
+		atomicAdd(&I[ch][ty][tx], BtdB[tz][x_y]*weight[i]);
+	}
 	__syncthreads();
     if(id < 32) {
         const int out_start1 = ((bx<<1)+1) + (((by<<1)+1)*18) + ((id)*324);
@@ -222,7 +229,7 @@ int main(){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
     cudaMemset(&d_char_outp, 0, sizeof(signed char)*PSIZE);
-    winograd<<<dim3(8, 8), dim3(4,4,32)>>>(d_charp, d_wino, d_char_outp);
+    winograd<<<dim3(8, 8), dim3(4,4,16)>>>(d_charp, d_wino, d_char_outp);
     elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -230,6 +237,8 @@ int main(){
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     printf("winograd:%f\n", elapsed_time_ms2);
+    signed char res1[PSIZE];
+    cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
     
 
     //Measure
@@ -249,7 +258,7 @@ int main(){
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-    conv_same_tiling<<<dim3(8, 8), 512>>>(d_charp, d_filter, d_char_outp);
+    conv_same_tiling<<<dim3(8, 8), 256>>>(d_charp, d_filter, d_char_outp);
     elapsed_time_ms3=0.0f;
     cudaEventRecord(stop, 0);
     cudaDeviceSynchronize();
@@ -263,8 +272,6 @@ int main(){
 
     
     //check result
-    signed char res1[PSIZE];
-    cudaMemcpy(res1, d_char_outp, sizeof(signed char) * PSIZE, cudaMemcpyDeviceToHost);
     signed char res[SIZE];
     cudaMemcpy(res, d_char_out, sizeof(signed char) * SIZE, cudaMemcpyDeviceToHost);
 
@@ -278,11 +285,11 @@ int main(){
     }
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] && resp[i] != res2[i]) {printf("%d ", i); miss++;}
+    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] || resp[i] != res2[i]) {miss++;}
     if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。normal/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
-    else if(miss != 0) printf("bat!");
+    else if(miss != 0) printf("miss = %d bat!", miss);
 
     free(h_char );
     cudaFree(d_char);

@@ -116,7 +116,9 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
 	
 	I[tz][ty][tx] = 0;
 	input_smem[tz][x_y] = input[in_start];
-    const int id = x_y + (threadIdx.z<<4);
+    const int id = x_y + (tz<<4);
+    
+    __syncthreads();
     if(id < 16){
         BtdB[id][0] = input_smem[id][0]-input_smem[id][8]-input_smem[id][2]+input_smem[id][10];
         BtdB[id][1] = input_smem[id][1]-input_smem[id][9]+input_smem[id][2]-input_smem[id][10];
@@ -135,7 +137,7 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         BtdB[id][14] = -input_smem[id][5]+input_smem[id][13]+input_smem[id][6]-input_smem[id][14];
         BtdB[id][15] = input_smem[id][5]-input_smem[id][13]-input_smem[id][7]+input_smem[id][15];
     }
-
+    __syncthreads();
     for(int i=0; i<16; i++){
         atomicAdd(&I[i][ty][tx], BtdB[tz][x_y]*weight[id + (i<<8)]);
     }
@@ -150,31 +152,6 @@ __global__ void winograd( signed char *input,  signed short *weight,  signed cha
         output[out_start3] = clamp((((I[id][1][0] + I[id][1][1] + I[id][1][2] - I[id][2][0] - I[id][2][1] - I[id][2][2] - I[id][3][0] - I[id][3][1] - I[id][3][2]) + (1 << 6)) >>7)) + 128;
         output[out_start4] = clamp((((I[id][1][1] - I[id][1][2] - I[id][1][3] - I[id][2][1] + I[id][2][2] + I[id][2][3] - I[id][3][1] + I[id][3][2] + I[id][3][3]) + (1 << 6)) >>7)) + 128;
     }
-
-	// if(ty > 1) return;
-	// switch (ty)
-	// {
-	// case 0:
-	// 	AtI[tz][ty][tx] = I[tz][0][tx] + I[tz][1][tx] + I[tz][2][tx];
-	// 	break;
-	// case 1:
-	// 	AtI[tz][ty][tx] = I[tz][1][tx] - I[tz][2][tx] - I[tz][3][tx];
-	// 	break;
-	// }
-	// // __syncthreads();
-
-	// if(tx > 1) return;
-	// switch (tx)
-	// {
-	// case 0:
-	// 	output[out_start] = clamp((((AtI[tz][ty][0] + AtI[tz][ty][1] + AtI[tz][ty][2]) + (1 << 6)) >>7)) + 128;
-	// 	break;
-	// case 1:
-	// 	output[out_start] = clamp((((AtI[tz][ty][1] - AtI[tz][ty][2] - AtI[tz][ty][3]) + (1 << 6)) >>7)) + 128;
-	// 	break;
-	// }
-	// __syncthreads();
-	// output[out_start] = clamp(((output_smem[tz][ty][tx] + (1 << 4)) >>5)) + 128;
 }
 
 __global__ void padding( signed char *input,  signed char *output){
@@ -300,11 +277,11 @@ int main(){
     }
 
     int miss = 0;
-    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] && resp[i] != res2[i]) {printf("%d ", i); miss++;}
+    for(int i=0;i<PSIZE; i++) if(resp[i] != res1[i] || res1[i] != res2[i]) {miss++;}
     if(miss == 0) printf("%f 倍速くなりました。normal/wino\n", elapsed_time_ms1/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。same_tiling/wino\n", elapsed_time_ms3/elapsed_time_ms2);
     if(miss == 0) printf("%f 倍速くなりました。normal/same_tiling\n", elapsed_time_ms1/elapsed_time_ms3);
-    else if(miss != 0) printf("bat!");
+    else if(miss != 0) printf("miss = %d bat!", miss);
 
     free(h_char );
     cudaFree(d_char);
