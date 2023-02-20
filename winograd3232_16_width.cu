@@ -209,10 +209,10 @@ int main(){
     //warm up
     for(int i=0;i<100;i++) conv<<<dim3(16, 16), 64>>>(d_char, d_filter, d_char_out);
     //Measure
+    cudaMemset(&d_char_out, 0, sizeof(signed char)*SIZE);
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-    cudaMemset(&d_char_out, 0, sizeof(signed char)*SIZE);
     conv<<<dim3(16, 16), 64>>>(d_char, d_filter, d_char_out);
     elapsed_time_ms1=0.0f;
     cudaEventRecord(stop, 0);
@@ -227,11 +227,10 @@ int main(){
     
 
     //Measure
+    cudaMemset(&d_char_out, 0, sizeof(signed char)*(SIZE));
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
-
-    cudaMemset(&d_char_out, 0, sizeof(signed char)*(SIZE));
     winograd<<<dim3(16, 16), 64>>>(d_char, d_wino, d_char_out);
     elapsed_time_ms2=0.0f;
     cudaEventRecord(stop, 0);
