@@ -1,66 +1,14 @@
 # winogradとの比較 on my GPU(GeForce GTX 1650)
-| | time1[ms] | time2(winograd)[ms] | elapsed_time_ms1/elapsed_time_ms2 |
+| | time1[ms] | time2(winograd)[ms] | time1/time2 |
 | ---- | ---- | ---- | ---- |
 | input3232_16 | 0.024704 | 0.018624 | 1.326460 |
 | input1616_32 | 0.017568 | 0.013920 | 1.262069 |
 | input88_64   | 0.033888 | 0.018464 | 1.835355 |
 
 # winogradとの比較 on JetsonNano 4GB(-arch=sm_50)
-| | time1[ms] | time2(winograd)[ms] | elapsed_time_ms1/elapsed_time_ms2 |
+| | time1[ms] | time2(winograd)[ms] | time1/time2 |
 | ---- | ---- | ---- | ---- |
 | input3232_16 | 0.261094 | 0.199844 | 1.306489 |
 | input1616_32 | 0.309323 | 0.203073 | 1.523211 |
 | input88_64   | 0.240104 | 0.159844 | 1.502115 |
 
-
-
-
-
-
-
-
-
-
-
-
-# winogradとの比較
-| | time1[ms] | time2(winograd)[ms] | elapsed_time_ms1/elapsed_time_ms2 |
-| ---- | ---- | ---- | ---- |
-| input3232_3_output3232_16 | 0.010112 | 0.012608 | 0.802030 |
-| input3232_16_output3232_16 | 0.032768 | 0.026496 | 1.236715 |
-| input3232_16_output1616_32 | 0.024032 | 0.046208 | 0.686169 |
-| input1616_32_output1616_32 | 0.030720 | 0.020864 | 1.472393 |
-| input1616_32_output88_64 | 0.022176 | 0.032768 | 0.676758 |
-| input88_64_output88_64 | 0.028480 | 0.024576 | 1.158854 |
-
-winograd:1.932604
-normal:2.741406
-same_tiling:2.204167
-1.418504 倍速くなりました。normal/wino
-1.140517 倍速くなりました。same_tiling/wino
-1.243738 倍速くなりました。normal/same_tiling
-
-# on JetsonNano 2GB
-| | time0(nomal)[ms] | time1(same_tiling)[ms] | time2(winograd)[ms] | time1/time2 | time0/time2 | time0/time1 |
-| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
-| input3232_3_output3232_16 | 1.206875 | ---- | 0.681771 | 0.564906 | ---- | ---- |
-| input3232_16_output3232_16 | 1.549896 | 1.319792 | 1.238750 | 1.065422 | 1.174349 | 1.251177 |
-| input3232_16_output1616_32 | 3.323542 | ---- | 4.283802 | 0.782452 | ---- | ---- |
-| input1616_32_output1616_32 | 2.741406 | 2.270989 | 2.204167 | 1.140517 | 1.418504 | 1.243738 |
-| input1616_32_output88_64 | 2.613073 | ---- | 3.570260 | 0.731900 | ---- | ---- |
-| input88_64_output88_64 | 2.622135 | 2.219479 | 1.751927 | 1.266879  | 1.496715 | 1.181419 |
-
-# same tiling
-| | time1(all block)[ms] | time2(per block)[ms] |
-| ---- | ---- | ---- |
-| input3232_16_output1616_16 | 31.323296 | 35.233791 |
-| input1616_32_output1616_32 | 30.318592 | 34.079617 |
-| input88_64_output88_64 | 26.871489 | 31.176704 |
-
-
-# 最適化オプション
-|  | -dlto | --use_fast_math | both | none |
-| ---- | ---- | ---- | ---- | ---- |
-| input32_16_output16_16 |  2.724583 | 2.494063 | 2.737760 | 2.473750 |
-| input16_32_output16_32 |  2.128698 | 1.942552 | 2.059739 | 1.937604 |
-| input8_64_output8_64 |  1.798750 | 1.756042 | 1.795313 | 1.743437 |
